@@ -187,13 +187,14 @@ def plot_erds_map(erds, times, freqs, ch_names, vmin=-100, vmax=100):
     for ax, data, name in zip(axes, erds, ch_names):
         im = ax.pcolormesh(
             times, freqs, data,
-            cmap='RdBu_r',
+            cmap='RdBu',  # RdBu_r에서 RdBu로 변경
             norm=TwoSlopeNorm(vmin=vmin, vcenter=0, vmax=vmax)
         )
         ax.set_title(f'채널: {name}')
         ax.set_xlabel('시간 (초)')
         ax.set_ylabel('주파수 (Hz)')
-        plt.colorbar(im, ax=ax, label='ERDS (%)')
+        cbar = plt.colorbar(im, ax=ax)
+        cbar.set_label('ERDS (%)\n파란색: ERD(활성화) / 빨간색: ERS(억제)')
     
     plt.tight_layout()
     return fig
@@ -208,23 +209,29 @@ def analyze_single_subject(subject_num, channels_of_interest=['F3', 'F4', 'F7', 
     channels_of_interest : list
         분석할 채널 목록
     """
-    # 데이터 로드 및 전처리
+    # 데이터 로드
     raw_rest, raw_task = load_subject_data(subject_num)
     
     # 채널 이름 출력
-    print("사용 가능한 채널 목록:")
+    print("전처리 전 사용 가능한 채널 목록:")
     print(raw_rest.ch_names)
     
+    # 채널 선택 (전처리 전에 수행)
+    channels_to_pick = [ch for ch in channels_of_interest if ch in raw_rest.ch_names]
+    if not channels_to_pick:
+        print("\n경고: 지정한 채널을 찾을 수 없습니다.")
+        print("전체 채널 목록에서 앞의 4개 채널을 사용합니다.")
+        channels_to_pick = raw_rest.ch_names[:4]
+    
+    print("\n분석에 사용할 채널:")
+    print(channels_to_pick)
+    
+    raw_rest.pick_channels(channels_to_pick)
+    raw_task.pick_channels(channels_to_pick)
+    
+    # 전처리 수행
     raw_rest = preprocess_raw(raw_rest)
     raw_task = preprocess_raw(raw_task)
-    
-    # 채널 선택
-    available_channels = [ch for ch in channels_of_interest if ch in raw_rest.ch_names]
-    if not available_channels:
-        raise ValueError("지정한 채널 중 데이터에 존재하는 채널이 없습니다.")
-    
-    raw_rest.pick_channels(available_channels)
-    raw_task.pick_channels(available_channels)
     
     # 에포크 생성
     epochs_rest = create_epochs(raw_rest, duration=30, overlap=15)
@@ -251,6 +258,47 @@ def analyze_single_subject(subject_num, channels_of_interest=['F3', 'F4', 'F7', 
     
     return fig, erds
 
+def analyze_groups(channels_of_interest=['F3', 'F4', 'F7', 'F8']):
+    """그룹별 분석을 수행합니다.
+    
+    Parameters
+    ----------
+    channels_of_interest : list
+        분석할 채널 목록
+        
+    Returns
+    -------
+    mean_erds : dict
+        그룹별 평균 ERDS 값
+    """
+    # 피험자 정보 로드
+    subject_info = pd.read_csv('./EEG_arithmetic_task/subject-info.csv')
+    
+    # 그룹별 ERDS 데이터 저장할 딕셔너리
+    group_erds = {'G': [], 'B': []}
+    
+    # 각 피험자의 데이터 처리
+    for idx, row in subject_info.iterrows():
+        subject_num = idx
+        group = 'G' if row['Count quality'] == 1 else 'B'
+        
+        try:
+            # 단일 피험자 분석
+            _, erds = analyze_single_subject(subject_num, channels_of_interest)
+            group_erds[group].append(erds)
+            print(f'피험자 {subject_num:02d} 처리 완료')
+            
+        except Exception as e:
+            print(f'피험자 {subject_num:02d} 처리 중 오류: {str(e)}')
+            continue
+    
+    # 그룹별 평균 ERDS 계산
+    mean_erds = {}
+    for group in ['G', 'B']:
+        if group_erds[group]:
+            mean_erds[group] = np.mean(group_erds[group], axis=0)
+    
+    return mean_erds
 
 def main():
     """메인 실행 함수"""
@@ -258,7 +306,7 @@ def main():
     os.makedirs('results', exist_ok=True)
     
     # 분석할 채널 설정
-    channels_of_interest = ['F3', 'F4', 'F7', 'F8']
+    channels_of_interest = ['EEG F3', 'EEG F4', 'EEG F7', 'EEG F8']  # EEG 접두사 추가
     
     # 단일 피험자 분석 예시 (피험자 0)
     fig, _ = analyze_single_subject(0, channels_of_interest)
